@@ -37,7 +37,8 @@ const PLATFORMS = {
 function detectPlatform(url) {
   if (!url) return null;
   try {
-    const u = new URL(url.trim());
+    const raw = url.trim();
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
     const host = u.hostname.toLowerCase();
     for (const p of Object.values(PLATFORMS)) {
       if (p.hosts.some(h => host === h || host.endsWith("." + h) || host === h.replace("www.", ""))) {
@@ -483,7 +484,7 @@ function Result({ meta, tabList, activeTab, setActiveTab, formats }) {
       </div>
 
       <div className="formats">
-        {formats.map(f => <FormatRow key={f.id} fmt={f} tab={activeTab} />)}
+        {formats.map(f => <FormatRow key={f.id} fmt={f} tab={activeTab} meta={meta} />)}
       </div>
     </div>
   );
@@ -503,7 +504,44 @@ function PlatformBadge({ platform }) {
   );
 }
 
-function FormatRow({ fmt, tab }) {
+function cleanFilename(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "download";
+}
+
+function makeDownloadFile(fmt, tab, meta) {
+  const extension = (fmt.container || "bin").toLowerCase();
+  const filename = `${cleanFilename(meta.title)}-${fmt.id}.${extension}`;
+  const lines = [
+    `Snaglink demo export`,
+    `Title: ${meta.title}`,
+    `Author: ${meta.author}`,
+    `Platform: ${meta.platform}`,
+    `Type: ${tab}`,
+    `Format: ${fmt.label}`,
+    `Container: ${fmt.container}`,
+    `Codec: ${fmt.codec}${fmt.fps ? ` ${fmt.fps}fps` : ""}`,
+    `Generated: ${new Date().toISOString()}`,
+  ];
+  return {
+    filename,
+    blob: new Blob([lines.join("\n") + "\n"], { type: "application/octet-stream" }),
+  };
+}
+
+function triggerDownload(file) {
+  const href = URL.createObjectURL(file.blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = file.filename;
+  a.click();
+  URL.revokeObjectURL(href);
+}
+
+function FormatRow({ fmt, tab, meta }) {
   const [state, setState] = useState("idle"); // idle | progress | done
   const [pct, setPct] = useState(0);
   const rafRef = useRef();
@@ -526,7 +564,10 @@ function FormatRow({ fmt, tab }) {
       const p = Math.min(1, e / total);
       setPct(p * 100);
       if (p < 1) rafRef.current = requestAnimationFrame(step);
-      else setTimeout(() => setState("done"), 120);
+      else setTimeout(() => {
+        triggerDownload(makeDownloadFile(fmt, tab, meta));
+        setState("done");
+      }, 120);
     }
     rafRef.current = requestAnimationFrame(step);
   }

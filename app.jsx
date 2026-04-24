@@ -37,8 +37,7 @@ const PLATFORMS = {
 function detectPlatform(url) {
   if (!url) return null;
   try {
-    const raw = url.trim();
-    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    const u = new URL(normalizeUrl(url));
     const host = u.hostname.toLowerCase();
     for (const p of Object.values(PLATFORMS)) {
       if (p.hosts.some(h => host === h || host.endsWith("." + h) || host === h.replace("www.", ""))) {
@@ -47,6 +46,18 @@ function detectPlatform(url) {
     }
   } catch {}
   return null;
+}
+
+function normalizeUrl(url) {
+  const raw = url.trim();
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+async function fetchOEmbed(url) {
+  const endpoint = `https://noembed.com/embed?url=${encodeURIComponent(normalizeUrl(url))}`;
+  const res = await fetch(endpoint);
+  if (!res.ok) throw new Error("oEmbed lookup failed");
+  return res.json();
 }
 
 // Deterministic pseudo-random from a string
@@ -245,6 +256,14 @@ function Thumb({ meta }) {
   const gradient = `linear-gradient(135deg, ${meta.thumbColor}, oklch(0.2 0 0))`;
   return (
     <div className="thumb" data-kind={meta.kind} style={{ background: gradient }}>
+      {meta.thumbUrl && (
+        <img
+          src={meta.thumbUrl}
+          alt={meta.title}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+          referrerPolicy="no-referrer"
+        />
+      )}
       <div style={{
         position: "absolute", inset: 0,
         backgroundImage:
@@ -297,7 +316,7 @@ function Downloader() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  function fetchMedia() {
+  async function fetchMedia() {
     if (!url.trim()) return;
     if (!resolved) {
       setError("Unsupported URL. Paste a YouTube, Instagram, or Pinterest link.");
@@ -307,12 +326,25 @@ function Downloader() {
     setError("");
     setStatus("loading");
     setMeta(null);
-    setTimeout(() => {
+    try {
       const m = makeMeta(resolved, url);
-      setMeta({ ...m, sourceUrl: url.trim() });
+      let enriched = m;
+      if (resolved === "youtube") {
+        const oembed = await fetchOEmbed(url.trim());
+        enriched = {
+          ...m,
+          title: oembed.title || m.title,
+          author: oembed.author_name || m.author,
+          thumbUrl: oembed.thumbnail_url,
+        };
+      }
+      setMeta({ ...enriched, sourceUrl: url.trim() });
       setActiveTab(m.kind === "image" ? "image" : "video");
       setStatus("ready");
-    }, 900 + Math.random() * 500);
+    } catch {
+      setError("Could not fetch media details for that link. Please try another URL.");
+      setStatus("error");
+    }
   }
 
   function handleSubmit(e) {
@@ -333,15 +365,28 @@ function Downloader() {
     setTimeout(() => fetchMediaWith(samples[p], p), 50);
   }
 
-  function fetchMediaWith(u, p) {
+  async function fetchMediaWith(u, p) {
     setStatus("loading");
     setMeta(null);
-    setTimeout(() => {
+    try {
       const m = makeMeta(p, u);
-      setMeta({ ...m, sourceUrl: u.trim() });
+      let enriched = m;
+      if (p === "youtube") {
+        const oembed = await fetchOEmbed(u.trim());
+        enriched = {
+          ...m,
+          title: oembed.title || m.title,
+          author: oembed.author_name || m.author,
+          thumbUrl: oembed.thumbnail_url,
+        };
+      }
+      setMeta({ ...enriched, sourceUrl: u.trim() });
       setActiveTab(m.kind === "image" ? "image" : "video");
       setStatus("ready");
-    }, 900);
+    } catch {
+      setError("Could not fetch media details for that link. Please try another URL.");
+      setStatus("error");
+    }
   }
 
   const formats = useMemo(() => (meta ? buildFormats(meta) : null), [meta]);

@@ -37,7 +37,8 @@ const PLATFORMS = {
 function detectPlatform(url) {
   if (!url) return null;
   try {
-    const u = new URL(url.trim());
+    const raw = url.trim();
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
     const host = u.hostname.toLowerCase();
     for (const p of Object.values(PLATFORMS)) {
       if (p.hosts.some(h => host === h || host.endsWith("." + h) || host === h.replace("www.", ""))) {
@@ -308,7 +309,7 @@ function Downloader() {
     setMeta(null);
     setTimeout(() => {
       const m = makeMeta(resolved, url);
-      setMeta(m);
+      setMeta({ ...m, sourceUrl: url.trim() });
       setActiveTab(m.kind === "image" ? "image" : "video");
       setStatus("ready");
     }, 900 + Math.random() * 500);
@@ -337,7 +338,7 @@ function Downloader() {
     setMeta(null);
     setTimeout(() => {
       const m = makeMeta(p, u);
-      setMeta(m);
+      setMeta({ ...m, sourceUrl: u.trim() });
       setActiveTab(m.kind === "image" ? "image" : "video");
       setStatus("ready");
     }, 900);
@@ -483,7 +484,7 @@ function Result({ meta, tabList, activeTab, setActiveTab, formats }) {
       </div>
 
       <div className="formats">
-        {formats.map(f => <FormatRow key={f.id} fmt={f} tab={activeTab} />)}
+        {formats.map(f => <FormatRow key={f.id} fmt={f} tab={activeTab} meta={meta} />)}
       </div>
     </div>
   );
@@ -503,7 +504,35 @@ function PlatformBadge({ platform }) {
   );
 }
 
-function FormatRow({ fmt, tab }) {
+function cleanFilename(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "download";
+}
+
+function pickDemoUrl(tab, fmt) {
+  if (tab === "video") return "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+  if (tab === "audio") return "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3";
+  if (fmt.container === "GIF") return "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDJjMjVza3AwdXI3YnVjMmR4bTNyYjQ5ZW5jcWM0eWpnaXVjM2R0NiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/ICOgUNjpvO0PC/giphy.gif";
+  if (fmt.container === "WEBP") return "https://www.gstatic.com/webp/gallery/1.webp";
+  return "https://picsum.photos/seed/snaglink/1920/1080.jpg";
+}
+
+async function downloadFromUrl(url, filename) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(href);
+}
+
+function FormatRow({ fmt, tab, meta }) {
   const [state, setState] = useState("idle"); // idle | progress | done
   const [pct, setPct] = useState(0);
   const rafRef = useRef();
@@ -526,7 +555,18 @@ function FormatRow({ fmt, tab }) {
       const p = Math.min(1, e / total);
       setPct(p * 100);
       if (p < 1) rafRef.current = requestAnimationFrame(step);
-      else setTimeout(() => setState("done"), 120);
+      else setTimeout(async () => {
+        try {
+          const extension = (fmt.container || "bin").toLowerCase();
+          const filename = `${cleanFilename(meta.title)}-${fmt.id}.${extension}`;
+          const source = pickDemoUrl(tab, fmt);
+          await downloadFromUrl(source, filename);
+          setState("done");
+        } catch {
+          setState("idle");
+          alert("Download failed. Please try another format.");
+        }
+      }, 120);
     }
     rafRef.current = requestAnimationFrame(step);
   }
